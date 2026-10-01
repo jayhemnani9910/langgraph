@@ -627,11 +627,6 @@ class PregelLoop:
             True if more iterations are needed.
         """
 
-        # check if iteration limit is reached
-        if self.step > self.stop:
-            self.status = "out_of_steps"
-            return False
-
         # prepare next tasks
         self.tasks = prepare_next_tasks(
             self.checkpoint,
@@ -676,6 +671,11 @@ class PregelLoop:
         # if no more tasks, we're done
         if not self.tasks:
             self.status = "done"
+            return False
+
+        # check if iteration limit is reached
+        if self.step >= self.stop:
+            self.status = "out_of_steps"
             return False
 
         if self.control is not None and self.control.drain_requested:

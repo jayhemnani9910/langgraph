@@ -69,6 +69,7 @@ from langgraph.errors import (
 from langgraph.func import entrypoint, task
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import MessagesState, _messages_delta_reducer, add_messages
+from langgraph.managed import IsLastStep
 from langgraph.pregel import NodeBuilder, Pregel
 from langgraph.pregel._loop import AsyncPregelLoop, PregelLoop
 from langgraph.pregel._runner import PregelRunner
@@ -1597,6 +1598,37 @@ async def test_invoke_two_processes_in_out(mocker: MockerFixture) -> None:
                 "output": 4,
             }
     assert step == 2
+
+
+async def test_recursion_limit_does_not_run_step_past_last_step() -> None:
+    class State(TypedDict):
+        n: int
+        is_last_step: IsLastStep
+
+    calls = []
+
+    async def step(state: State) -> dict:
+        calls.append(state["is_last_step"])
+        return {"n": state["n"] + 1}
+
+    builder = StateGraph(State)
+    builder.add_node("a", step)
+    builder.add_node("b", step)
+    builder.add_edge(START, "a")
+    builder.add_edge("a", "b")
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    config = {"configurable": {"thread_id": "1"}, "recursion_limit": 2}
+    with pytest.raises(GraphRecursionError):
+        await graph.ainvoke({"n": 0}, config)
+    assert calls == [True]
+    assert (await graph.aget_state(config)).next == ("b",)
+
+    calls.clear()
+    assert await graph.ainvoke(
+        {"n": 0}, {"configurable": {"thread_id": "2"}, "recursion_limit": 3}
+    ) == {"n": 2}
+    assert calls == [False, True]
 
 
 async def test_batch_two_processes_in_out() -> None:
