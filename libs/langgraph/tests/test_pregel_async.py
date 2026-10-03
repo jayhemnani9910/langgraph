@@ -5946,6 +5946,45 @@ async def test_debug_subgraphs(
             assert stream_task.get("state") == history_task.state
 
 
+async def test_debug_interrupt_after(async_checkpointer: BaseCheckpointSaver):
+    class State(TypedDict):
+        messages: Annotated[list[str], operator.add]
+
+    def node(name):
+        async def _node(state: State):
+            return {"messages": [f"entered {name} node"]}
+
+        return _node
+
+    builder = StateGraph(State)
+    builder.add_node("one", node("one"))
+    builder.add_node("two", node("two"))
+    builder.add_edge(START, "one")
+    builder.add_edge("one", "two")
+    builder.add_edge("two", END)
+
+    graph = builder.compile(checkpointer=async_checkpointer, interrupt_after=["one"])
+
+    config = {"configurable": {"thread_id": "1"}}
+    events = [
+        c
+        async for c in graph.astream(
+            {"messages": []}, config=config, stream_mode="debug"
+        )
+    ]
+
+    checkpoint_events = list(
+        reversed([e["payload"] for e in events if e["type"] == "checkpoint"])
+    )
+    checkpoint_history = [c async for c in graph.aget_state_history(config)]
+
+    assert [
+        e["config"]["configurable"]["checkpoint_id"] for e in checkpoint_events
+    ] == [c.config["configurable"]["checkpoint_id"] for c in checkpoint_history]
+    assert checkpoint_events[0]["values"] == {"messages": ["entered one node"]}
+    assert checkpoint_events[0]["next"] == ["two"]
+
+
 async def test_debug_nested_subgraphs(
     async_checkpointer: BaseCheckpointSaver, durability: Durability
 ) -> None:

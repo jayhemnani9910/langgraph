@@ -633,45 +633,10 @@ class PregelLoop:
             return False
 
         # prepare next tasks
-        self.tasks = prepare_next_tasks(
-            self.checkpoint,
-            self.checkpoint_pending_writes,
-            self.nodes,
-            self.channels,
-            self.managed,
-            self.config,
-            self.step,
-            self.stop,
-            for_execution=True,
-            manager=self.manager,
-            store=self.store,
-            checkpointer=self.checkpointer,
-            trigger_to_nodes=self.trigger_to_nodes,
-            updated_channels=self.updated_channels,
-            retry_policy=self.retry_policy,
-            cache_policy=self.cache_policy,
-        )
+        self.tasks = self._prepare_next_tasks()
 
         # produce debug output
-        if self._checkpointer_put_after_previous is not None:
-            self._emit(
-                "checkpoints",
-                map_debug_checkpoint,
-                {
-                    **self.checkpoint_config,
-                    CONF: {
-                        **self.checkpoint_config[CONF],
-                        CONFIG_KEY_CHECKPOINT_ID: self.checkpoint["id"],
-                    },
-                },
-                self.channels,
-                self.stream_keys,
-                self.checkpoint_metadata,
-                self.tasks.values(),
-                self.checkpoint_pending_writes,
-                self.prev_checkpoint_config,
-                self.output_keys,
-            )
+        self._emit_checkpoint(self.tasks)
 
         # if no more tasks, we're done
         if not self.tasks:
@@ -776,6 +741,8 @@ class PregelLoop:
             self.checkpoint, self.interrupt_after, self.tasks.values()
         ):
             self.status = "interrupt_after"
+            # produce debug output for the checkpoint just saved
+            self._emit_checkpoint(self._prepare_next_tasks())
             raise GraphInterrupt()
         # unset resuming flag
         self.config[CONF].pop(CONFIG_KEY_RESUMING, None)
@@ -1177,6 +1144,48 @@ class PregelLoop:
         if is_resuming:
             self._push_graph_lifecycle_event("resume")
         return updated_channels
+
+    def _prepare_next_tasks(self) -> dict[str, PregelExecutableTask]:
+        return prepare_next_tasks(
+            self.checkpoint,
+            self.checkpoint_pending_writes,
+            self.nodes,
+            self.channels,
+            self.managed,
+            self.config,
+            self.step,
+            self.stop,
+            for_execution=True,
+            manager=self.manager,
+            store=self.store,
+            checkpointer=self.checkpointer,
+            trigger_to_nodes=self.trigger_to_nodes,
+            updated_channels=self.updated_channels,
+            retry_policy=self.retry_policy,
+            cache_policy=self.cache_policy,
+        )
+
+    def _emit_checkpoint(self, tasks: Mapping[str, PregelExecutableTask]) -> None:
+        if self._checkpointer_put_after_previous is None:
+            return
+        self._emit(
+            "checkpoints",
+            map_debug_checkpoint,
+            {
+                **self.checkpoint_config,
+                CONF: {
+                    **self.checkpoint_config[CONF],
+                    CONFIG_KEY_CHECKPOINT_ID: self.checkpoint["id"],
+                },
+            },
+            self.channels,
+            self.stream_keys,
+            self.checkpoint_metadata,
+            tasks.values(),
+            self.checkpoint_pending_writes,
+            self.prev_checkpoint_config,
+            self.output_keys,
+        )
 
     def _put_checkpoint(self, metadata: CheckpointMetadata) -> None:
         # `is` (object identity) — not `==`. Three of four call sites pass a
